@@ -619,7 +619,7 @@ export default function App() {
                               </div>
                               <div className="flex-1 bg-[#070b11] border border-slate-800 rounded-xl p-2 relative">
                                 <label className="text-[10px] text-slate-500 uppercase font-bold absolute top-1.5 left-2">
-                                  Cash R$
+                                  Cash %
                                 </label>
                                 <input
                                   type="number"

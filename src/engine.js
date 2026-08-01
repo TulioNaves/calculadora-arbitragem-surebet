@@ -55,20 +55,25 @@ export function calcularArbitragemAvancada(vias, indiceBase) {
       via.rewardCondition === "lose" &&
       num(via.rewardValue) > 0;
 
-    // REGRA DO ORIGINAL: A Aposta Sem Risco só reduz o rateio (Odd - 1) se pertencer à Casa Base.
+    // A Aposta Sem Risco só reduz o rateio (Odd - 1) se pertencer à Casa Base.
     if (usaApostaSemRisco && groupId === baseGroupId) {
       oddRateio = lucroBruto;
     }
 
-    const cashbackRapido =
-      via.freebetType === "isFreebet" ? 0 : num(via.cashback);
+    // CONVERSÃO DO CASHBACK PARA PORCENTAGEM
+    const cashbackPct =
+      via.freebetType === "isFreebet" ? 0 : num(via.cashback) / 100;
     const valorRecompensa = ehDinheiro ? num(via.rewardValue) : 0;
 
-    let bonusSeLose = cashbackRapido;
-    if (ehDinheiro && condicaoLose) bonusSeLose += valorRecompensa;
+    let bonusSeLoseFixo = 0;
+    if (ehDinheiro && condicaoLose) bonusSeLoseFixo += valorRecompensa;
 
     let bonusSeGanha = 0;
     if (ehDinheiro && condicaoWin) bonusSeGanha += valorRecompensa;
+
+    // Define o dinheiroEmRisco conhecido inicialmente (Casa Base e Splits)
+    let dinheiroEmRisco =
+      groupId === baseGroupId || parentId ? num(via.stake) : 0;
 
     return {
       ...via,
@@ -77,29 +82,42 @@ export function calcularArbitragemAvancada(vias, indiceBase) {
       groupId,
       oddRateio,
       oddRetorno,
-      bonusSeLose,
+      cashbackPct,
+      bonusSeLoseFixo,
       bonusSeGanha,
       usaApostaSemRisco,
       ehLay,
       oddValida,
+      dinheiroEmRisco,
     };
   });
 
-  // 2. Mapeamento dos Grupos (Famílias)
+  // 2. Mapeamento dos Grupos (Famílias) e acúmulo das variáveis
   const gruposMap = {};
   viasProcessadas.forEach((via) => {
     if (!gruposMap[via.groupId]) {
       gruposMap[via.groupId] = {
         vias: [],
-        bonusSeLose: 0,
         bonusSeGanha: 0,
         anySemRisco: false,
+        sumFilhasRateio: 0,
+        knownGroupBonusLose: 0,
       };
     }
-    gruposMap[via.groupId].vias.push(via);
-    gruposMap[via.groupId].bonusSeLose += via.bonusSeLose;
-    gruposMap[via.groupId].bonusSeGanha += via.bonusSeGanha;
-    if (via.usaApostaSemRisco) gruposMap[via.groupId].anySemRisco = true;
+    const g = gruposMap[via.groupId];
+    g.vias.push(via);
+    g.bonusSeGanha += via.bonusSeGanha;
+    if (via.usaApostaSemRisco) g.anySemRisco = true;
+
+    if (via.groupId === baseGroupId || via.parentId) {
+      if (via.parentId) {
+        g.sumFilhasRateio += via.dinheiroEmRisco * via.oddRateio;
+      }
+      g.knownGroupBonusLose +=
+        via.bonusSeLoseFixo + via.dinheiroEmRisco * via.cashbackPct;
+    } else {
+      g.knownGroupBonusLose += via.bonusSeLoseFixo;
+    }
   });
 
   const baseGroup = gruposMap[baseGroupId];
@@ -107,41 +125,45 @@ export function calcularArbitragemAvancada(vias, indiceBase) {
   // 3. Constante K
   let sumRateioBase = 0;
   baseGroup.vias.forEach((v) => {
-    sumRateioBase += num(v.stake) * v.oddRateio;
+    sumRateioBase += v.dinheiroEmRisco * v.oddRateio;
   });
 
   const descontoCashbackBase = baseGroup.anySemRisco
     ? 0
-    : baseGroup.bonusSeLose;
+    : baseGroup.knownGroupBonusLose;
   const K = sumRateioBase - descontoCashbackBase + baseGroup.bonusSeGanha;
 
-  const totalBonusSeLose = Object.values(gruposMap).reduce(
-    (acc, g) => acc + g.bonusSeLose,
-    0,
-  );
-
-  // 4. Resolver o dinheiro em risco (Rateio)
+  // 4. Resolver o dinheiro em risco (Rateio) com a matemática do Cashback em %
   let investimentoTotalReal = 0;
+  let totalBonusSeLose = 0;
+
   const rateio = viasProcessadas.map((via) => {
     const group = gruposMap[via.groupId];
-    let dinheiroEmRisco = num(via.stake);
+    let dinheiroEmRisco = via.dinheiroEmRisco;
 
     if (via.groupId !== baseGroupId && !via.parentId) {
-      let sumFilhasRateio = 0;
-      group.vias.forEach((v) => {
-        if (v.parentId) sumFilhasRateio += num(v.stake) * v.oddRateio;
-      });
-
       if (via.oddRateio > 0) {
-        dinheiroEmRisco =
-          (K - sumFilhasRateio + group.bonusSeLose - group.bonusSeGanha) /
-          via.oddRateio;
+        // Isola o cashback no denominador para encontrar a stake exata
+        const numerador =
+          K -
+          group.sumFilhasRateio +
+          group.knownGroupBonusLose -
+          group.bonusSeGanha;
+        const denominador = via.oddRateio - via.cashbackPct;
+
+        dinheiroEmRisco = denominador !== 0 ? numerador / denominador : 0;
         if (dinheiroEmRisco < 0) dinheiroEmRisco = 0;
       } else {
         dinheiroEmRisco = 0;
       }
       dinheiroEmRisco = round2(dinheiroEmRisco);
     }
+
+    // Calcula o bônus de loss final da via com a stake definida
+    const bonusSeLoseTotal =
+      via.bonusSeLoseFixo + dinheiroEmRisco * via.cashbackPct;
+    totalBonusSeLose += bonusSeLoseTotal;
+    via.bonusSeLoseTotal = bonusSeLoseTotal;
 
     const custoOperacional =
       via.freebetType === "isFreebet" ? 0 : dinheiroEmRisco;
@@ -168,16 +190,18 @@ export function calcularArbitragemAvancada(vias, indiceBase) {
     const group = gruposMap[r.groupId];
 
     let sumRetornoRealGrupo = 0;
+    let groupBonusLose = 0;
     let stakeMae = 0;
 
     rateio.forEach((v) => {
       if (v.groupId === r.groupId) {
         sumRetornoRealGrupo += v.retornoReal;
+        groupBonusLose += v.bonusSeLoseTotal;
         if (!v.parentId) stakeMae = v.dinheiroEmRisco;
       }
     });
 
-    const bonusDosPerdedores = totalBonusSeLose - group.bonusSeLose;
+    const bonusDosPerdedores = totalBonusSeLose - groupBonusLose;
     const dinheiroRecebido =
       sumRetornoRealGrupo + group.bonusSeGanha + bonusDosPerdedores;
 
