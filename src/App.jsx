@@ -1,5 +1,7 @@
+import { supabase } from "./supabase";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { calcularArbitragemAvancada } from "./engine";
+import { QRCodeSVG } from "qrcode.react";
 import {
   Plus,
   Minus,
@@ -18,9 +20,22 @@ import {
   Maximize2,
   Minimize2,
   Trash2,
+  Share2,
+  Loader2,
+  Copy,
+  Check,
+  Send,
+  Camera,
+  Mail,
 } from "lucide-react";
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
+
+// TODO: troque pelos seus links reais
+const TELEGRAM_URL = "https://botgram.club/pardal-do-green/telegram";
+const INSTAGRAM_URL =
+  "https://www.instagram.com/pdgprocedimentos?igsh=azduam9ybW9xaWYy&utm_source=qr";
+const SUPPORT_EMAIL = "";
 
 const viaVazia = {
   type: "back",
@@ -52,6 +67,17 @@ export default function App() {
   const [dropdownAberto, setDropdownAberto] = useState(null);
   const dropdownRef = useRef(null);
 
+  const [isSharing, setIsSharing] = useState(false);
+  const [isLoadingShare, setIsLoadingShare] = useState(false);
+
+  // Popup de compartilhamento (link + QR code)
+  const [shareOpen, setShareOpen] = useState(false); // controla a montagem do popup
+  const [shareClosing, setShareClosing] = useState(false); // toca a animação de saída antes de desmontar
+  const [shareUrl, setShareUrl] = useState(null);
+  const [shareError, setShareError] = useState(null);
+  const [linkCopiado, setLinkCopiado] = useState(false);
+
+  // Fecha dropdown ao clicar fora
   useEffect(() => {
     function handleClickOutside(event) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -61,6 +87,92 @@ export default function App() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  // LÓGICA DE CARREGAMENTO DO COMPARTILHAMENTO
+  useEffect(() => {
+    const carregarCompartilhamento = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const saveId = params.get("s");
+
+      if (saveId) {
+        setIsLoadingShare(true);
+        const { data, error } = await supabase
+          .from("saves")
+          .select("state")
+          .eq("id", saveId)
+          .single();
+
+        if (data && data.state) {
+          if (data.state.vias) setVias(data.state.vias);
+          if (data.state.indiceBase !== undefined)
+            setIndiceBase(data.state.indiceBase);
+          if (data.state.layout) setLayout(data.state.layout);
+
+          window.history.replaceState({}, "", window.location.pathname);
+        } else if (error) {
+          console.error("Erro ao carregar link:", error);
+          alert("Link de compartilhamento inválido ou expirado.");
+        }
+        setIsLoadingShare(false);
+      }
+    };
+
+    carregarCompartilhamento();
+  }, []);
+
+  // LÓGICA DE SALVAMENTO DO COMPARTILHAMENTO
+  // Abre o popup imediatamente (com spinner) e preenche o link assim que
+  // o Supabase responder — assim o usuário já vê feedback visual na hora.
+  const handleCompartilhar = async () => {
+    setShareUrl(null);
+    setShareError(null);
+    setShareOpen(true);
+    setIsSharing(true);
+
+    const id = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const stateToSave = {
+      vias,
+      indiceBase,
+      layout,
+    };
+
+    const { error } = await supabase
+      .from("saves")
+      .insert([{ id, state: stateToSave }]);
+
+    if (error) {
+      console.error(error);
+      setShareError("Não foi possível gerar o link. Tente novamente.");
+    } else {
+      setShareUrl(`${window.location.origin}/?s=${id}`);
+    }
+
+    setIsSharing(false);
+  };
+
+  // Copia o link já gerado (usado pelo botão dentro do popup)
+  const handleCopyLink = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setLinkCopiado(true);
+      setTimeout(() => setLinkCopiado(false), 2000);
+    } catch (e) {
+      console.error("Erro ao copiar link:", e);
+    }
+  };
+
+  // Fecha o popup tocando a animação de saída antes de desmontar
+  const closeShareModal = () => {
+    setShareClosing(true);
+    setTimeout(() => {
+      setShareOpen(false);
+      setShareClosing(false);
+      setShareUrl(null);
+      setShareError(null);
+      setLinkCopiado(false);
+    }, 160);
+  };
 
   const [modalRecompensa, setModalRecompensa] = useState({
     isOpen: false,
@@ -141,7 +253,6 @@ export default function App() {
     setIndiceBase(newBaseIndex !== -1 ? newBaseIndex : 0);
   };
 
-  // Controles de Visualização
   const toggleCollapse = (id) => {
     setCollapsedCards((prev) => {
       const next = new Set(prev);
@@ -161,7 +272,6 @@ export default function App() {
     }
   };
 
-  // AGRUPAMENTO VISUAL: Organiza Mães e Filhas para renderizar em clusters
   const familias = useMemo(() => {
     const grupos = [];
     vias.forEach((via, index) => {
@@ -176,9 +286,8 @@ export default function App() {
   }, [vias]);
 
   return (
-    <div className="min-h-screen bg-[#070b11] text-slate-200 p-4 md:p-6 lg:p-8 font-sans selection:bg-emerald-500/30">
-      <div className="w-full mx-auto space-y-6">
-        {/* TOP NAVBAR - Dashboard Style */}
+    <div className="min-h-screen bg-[#070b11] text-slate-200 p-4 md:p-6 lg:p-8 font-sans selection:bg-emerald-500/30 flex flex-col">
+      <div className="w-full mx-auto flex-1 flex flex-col gap-6">
         <header className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-[#0d131f] p-4 lg:px-6 rounded-2xl border border-slate-800 shadow-xl">
           <div className="flex items-center gap-4">
             <img
@@ -188,7 +297,7 @@ export default function App() {
             />
             <div>
               <h1 className="text-xl font-black text-white tracking-tight leading-tight">
-                Surebet Calculator
+                PDG Surebet Calculator
               </h1>
               <p className="text-xs text-slate-400 font-medium">
                 Calcule stakes e lucros da sua arbitragem
@@ -206,7 +315,9 @@ export default function App() {
               ) : (
                 <Minimize2 size={14} />
               )}
-              {isAllCollapsed ? "Expandir tudo" : "Recolher tudo"}
+              <span className="hidden sm:inline">
+                {isAllCollapsed ? "Expandir tudo" : "Recolher tudo"}
+              </span>
             </button>
 
             <div className="flex bg-[#070b11] p-1 rounded-lg border border-slate-800">
@@ -214,28 +325,42 @@ export default function App() {
                 onClick={() => setLayout("grid")}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all text-sm font-medium ${layout === "grid" ? "bg-[#1a2332] text-emerald-400 shadow-sm" : "text-slate-400 hover:text-slate-200"}`}
               >
-                <LayoutGrid size={16} /> Horizontal
+                <LayoutGrid size={16} />{" "}
+                <span className="hidden sm:inline">Horizontal</span>
               </button>
               <button
                 onClick={() => setLayout("list")}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all text-sm font-medium ${layout === "list" ? "bg-[#1a2332] text-emerald-400 shadow-sm" : "text-slate-400 hover:text-slate-200"}`}
               >
-                <LayoutList size={16} /> Vertical
+                <LayoutList size={16} />{" "}
+                <span className="hidden sm:inline">Vertical</span>
               </button>
             </div>
 
             <button
               onClick={adicionarVia}
-              className="flex-1 lg:flex-none flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-emerald-950 px-5 py-2.5 rounded-lg text-sm font-bold transition-all duration-200 shadow-[0_0_15px_rgba(16,185,129,0.2)] active:scale-95"
+              className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-[#1a2332] hover:bg-[#202b3c] border border-slate-700/50 text-emerald-400 text-sm font-bold transition-all duration-200 active:scale-95"
             >
               <Plus size={16} strokeWidth={3} /> Nova Casa
+            </button>
+
+            <button
+              onClick={handleCompartilhar}
+              disabled={isSharing || isLoadingShare}
+              className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-sm font-bold transition-all duration-200 shadow-[0_0_20px_rgba(16,185,129,0.25)] active:scale-95 disabled:opacity-50 disabled:pointer-events-none"
+            >
+              {isSharing || isLoadingShare ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Share2 size={16} strokeWidth={2.5} />
+              )}
+              <span className="hidden sm:inline">Compartilhar</span>
             </button>
           </div>
         </header>
 
-        {/* WORKSPACE - Renderização baseada em Famílias (Clusters) */}
         <main
-          className={`flex gap-6 pb-32 items-start ${layout === "grid" ? "flex-wrap" : "flex-col max-w-4xl mx-auto"}`}
+          className={`flex-1 flex gap-6 pb-32 items-start ${layout === "grid" ? "flex-wrap" : "flex-col max-w-4xl mx-auto"}`}
         >
           {familias.map((familia, fIndex) => (
             <div
@@ -246,7 +371,7 @@ export default function App() {
               `}
             >
               {[familia.mae, ...familia.filhas].map((via, relIndex) => {
-                const index = via.realIndex; // ÍNDICE REAL DO MOTOR MATEMÁTICO (CRUCIAL)
+                const index = via.realIndex;
                 const ehLay = via.type === "lay";
                 const isChild = via.parentId !== null;
                 const isBase = index === indiceBase;
@@ -276,7 +401,6 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* Header do Card (Título, Toggles, Ações) */}
                     <div className="mb-5">
                       {isChild && (
                         <div className="flex justify-between items-center text-xs mb-3">
@@ -305,7 +429,6 @@ export default function App() {
                           />
                         </div>
 
-                        {/* Segmented Control Back/Lay (Stilo Claude) */}
                         <div className="flex bg-[#070b11] p-1 rounded-xl border border-slate-800/80 flex-none">
                           <button
                             onClick={() => atualizarVia(index, "type", "back")}
@@ -321,7 +444,6 @@ export default function App() {
                           </button>
                         </div>
 
-                        {/* Botões de Ação Menores */}
                         <div className="flex items-center gap-1 ml-1">
                           <button
                             onClick={() => toggleCollapse(via.id)}
@@ -347,7 +469,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Main Inputs (Odd & Stake) */}
                     <div className="space-y-4">
                       <div className="space-y-3">
                         <div className="relative">
@@ -447,10 +568,8 @@ export default function App() {
                         )}
                       </div>
 
-                      {/* Bloco Retrátil (Accordions) */}
                       {!isCollapsed && (
                         <div className="space-y-4 pt-2 border-t border-slate-800/60 animate-in fade-in slide-in-from-top-2 duration-200">
-                          {/* Configs Simplificado */}
                           <div>
                             <label className="text-[10px] font-bold text-slate-500 flex items-center gap-1.5 uppercase tracking-widest mb-2 ml-1">
                               <Settings2 size={12} /> Ajustes da Odd
@@ -522,7 +641,6 @@ export default function App() {
                             </div>
                           </div>
 
-                          {/* Freebet Estilo Select/Modal */}
                           <div
                             className="relative"
                             ref={dropdownAberto === index ? dropdownRef : null}
@@ -657,7 +775,6 @@ export default function App() {
                         </div>
                       )}
 
-                      {/* Bloco Fixo de Resultados (Fora do Collapse) */}
                       {!isChild && (
                         <div className="pt-2">
                           {resultado && dadosCalculados && (
@@ -705,8 +822,7 @@ export default function App() {
           ))}
         </main>
 
-        {/* FLOATING FOOTER - Dashboard Blur */}
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[800px] bg-[#070b11]/80 backdrop-blur-2xl p-4 md:px-8 rounded-2xl border border-slate-700/60 shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex items-center justify-between gap-6 z-40">
+        <div className="sticky bottom-4 md:bottom-6 z-40 mx-auto w-full max-w-[800px] bg-[#070b11]/80 backdrop-blur-2xl p-4 md:px-8 rounded-2xl border border-slate-700/60 shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex items-center justify-between gap-6">
           <div className="flex-1">
             <p className="text-[10px] text-slate-400 uppercase font-bold tracking-widest mb-1">
               Investimento Total
@@ -729,9 +845,49 @@ export default function App() {
             </p>
           </div>
         </div>
+
+        <footer className="border-t border-slate-800/60 pt-4 pb-4">
+          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
+            <a
+              href={TELEGRAM_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-emerald-400 transition-colors"
+            >
+              <Send size={14} />
+              Telegram
+            </a>
+            <a
+              href={INSTAGRAM_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-emerald-400 transition-colors"
+            >
+              <Camera size={14} />
+              Instagram
+            </a>
+            <a
+              href={`mailto:${SUPPORT_EMAIL}`}
+              className="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-emerald-400 transition-colors"
+            >
+              <Mail size={14} />
+              E-mail
+            </a>
+          </div>
+
+          <div className="mt-4 space-y-1.5 text-center">
+            <p className="mx-auto max-w-lg text-[11px] leading-relaxed text-slate-600">
+              Ferramenta com fins exclusivamente informativos e de cálculo -
+              jogue com responsabilidade.
+            </p>
+            <p className="text-[11px] text-slate-700">
+              © {new Date().getFullYear()} PDG-Surebet Calculator. Todos os
+              direitos reservados.
+            </p>
+          </div>
+        </footer>
       </div>
 
-      {/* MODAL CONFIGURAÇÃO RECOMPENSA */}
       {modalRecompensa.isOpen && modalRecompensa.viaIndex !== null && (
         <div className="fixed inset-0 bg-[#070b11]/90 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
           <div className="bg-[#0d131f] border border-slate-700 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col scale-in-center">
@@ -871,6 +1027,97 @@ export default function App() {
               >
                 Salvar Regras
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {shareOpen && (
+        <div
+          onClick={closeShareModal}
+          className={`fixed inset-0 bg-[#070b11]/90 backdrop-blur-sm flex items-center justify-center z-[60] p-4 ${
+            shareClosing
+              ? "animate-out fade-out duration-150"
+              : "animate-in fade-in duration-200"
+          }`}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`bg-[#0d131f] border border-slate-700 w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden flex flex-col ${
+              shareClosing
+                ? "animate-out fade-out zoom-out-95 slide-out-to-bottom-2 duration-150"
+                : "animate-in fade-in zoom-in-95 slide-in-from-bottom-2 duration-200"
+            }`}
+          >
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-[#070b11]">
+              <h2 className="font-bold text-lg text-white flex items-center gap-2">
+                <Share2 className="text-emerald-400" size={18} />
+                Compartilhar
+              </h2>
+              <button
+                onClick={closeShareModal}
+                className="text-slate-500 hover:text-white bg-slate-800 hover:bg-slate-700 p-2 rounded-full transition-colors"
+              >
+                <X size={16} strokeWidth={3} />
+              </button>
+            </div>
+
+            <div className="p-6 flex flex-col items-center gap-5">
+              {shareError ? (
+                <div className="w-full py-4 text-center space-y-3">
+                  <p className="text-sm text-rose-400 font-medium">
+                    {shareError}
+                  </p>
+                  <button
+                    onClick={handleCompartilhar}
+                    className="px-5 py-2 rounded-lg bg-[#1a2332] hover:bg-[#202b3c] border border-slate-700/50 text-sm font-bold text-slate-200 transition-all"
+                  >
+                    Tentar novamente
+                  </button>
+                </div>
+              ) : !shareUrl ? (
+                <div className="flex flex-col items-center gap-3 py-10">
+                  <Loader2
+                    size={28}
+                    className="animate-spin text-emerald-400"
+                  />
+                  <p className="text-xs text-slate-500 font-medium">
+                    Gerando link...
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div className="bg-white p-3 rounded-xl shadow-[0_0_30px_rgba(16,185,129,0.15)]">
+                    <QRCodeSVG
+                      value={shareUrl}
+                      size={152}
+                      bgColor="#ffffff"
+                      fgColor="#070b11"
+                      level="M"
+                    />
+                  </div>
+
+                  <p className="w-full truncate rounded-lg bg-[#070b11] border border-slate-800 px-3 py-2 text-center text-xs font-medium text-slate-400 tabular-nums">
+                    {shareUrl}
+                  </p>
+
+                  <button
+                    onClick={handleCopyLink}
+                    className={`w-full flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-sm font-bold transition-all duration-200 active:scale-95 ${
+                      linkCopiado
+                        ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/40"
+                        : "bg-emerald-500 hover:bg-emerald-400 text-emerald-950 shadow-[0_0_20px_rgba(16,185,129,0.25)]"
+                    }`}
+                  >
+                    {linkCopiado ? (
+                      <Check size={16} strokeWidth={2.5} />
+                    ) : (
+                      <Copy size={16} strokeWidth={2.5} />
+                    )}
+                    {linkCopiado ? "Link copiado!" : "Copiar link"}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
